@@ -1,0 +1,1 @@
+{"version":1,"defects":{"SecurityTest::testValidEncryptionDecryptionCycle":4,"SecurityTest::testTamperedCiphertextThrowsAeadException":4},"times":{"SecurityTest::testValidEncryptionDecryptionCycle":0.001,"SecurityTest::testTamperedCiphertextThrowsAeadException":0.001,"SecurityTest::testArgon2idCredentialVerification":0.581}}
