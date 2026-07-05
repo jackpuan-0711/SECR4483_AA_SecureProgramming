@@ -1,42 +1,58 @@
 <?php
-// auth_secure.php - Secure Staff Key Authentication System
+// auth_secure.php - Secure Staff Authentication using UTF-8 validation and Argon2id
+
 require_once 'db_config_pdo.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = $_POST['username'] ?? '';
     $inputKey = $_POST['auth_key'] ?? '';
 
-    // 1. Validate UTF-8 encoding
     if (!mb_check_encoding($username, 'UTF-8') || !mb_check_encoding($inputKey, 'UTF-8')) {
         http_response_code(400);
-        exit("Invalid encoding.");
+        exit("Invalid UTF-8 input.");
     }
 
-    // 2. Character-aware and byte-aware boundary checking
-    if (mb_strlen($inputKey, 'UTF-8') > 256 || strlen($inputKey) > 1024) {
+    $username = trim($username);
+
+    if ($username === '' || $inputKey === '') {
         http_response_code(400);
-        exit("Authentication key exceeds allowed boundary.");
+        exit("Username and authentication key are required.");
     }
 
-    // 3. Fetch staff credential hash using prepared statement
+    if (mb_strlen($username, 'UTF-8') > 100) {
+        http_response_code(400);
+        exit("Username is too long.");
+    }
+
+    if (mb_strlen($inputKey, 'UTF-8') > 256) {
+        http_response_code(400);
+        exit("Authentication key exceeds 256 characters.");
+    }
+
     $stmt = $pdo->prepare(
-        "SELECT username, auth_key_hash, role 
-         FROM staff_credentials 
-         WHERE username = :username 
+        "SELECT username, auth_key_hash, role
+         FROM staff_credentials
+         WHERE username = :username
          LIMIT 1"
     );
 
     $stmt->execute([
-        "username" => $username
+        'username' => $username
     ]);
 
     $staff = $stmt->fetch();
 
-    // 4. Verify using Argon2id-compatible password_verify()
-    if ($staff && password_verify($inputKey, $staff['auth_key_hash'])) {
-        echo "Access Granted. Role: " . htmlspecialchars($staff['role'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    if (!$staff) {
+        echo "Access Denied.";
+        exit;
+    }
+
+    $storedHash = $staff['auth_key_hash'];
+
+    if (password_verify($inputKey, $storedHash)) {
+        $safeRole = htmlspecialchars($staff['role'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        echo "Access Granted. Role: " . $safeRole;
     } else {
-        http_response_code(401);
         echo "Access Denied.";
     }
 }

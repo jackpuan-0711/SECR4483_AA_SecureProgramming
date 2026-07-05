@@ -3,7 +3,7 @@ use PHPUnit\Framework\TestCase;
 
 final class SecurityTest extends TestCase
 {
-    protected function setUp(): void
+    public static function setUpBeforeClass(): void
     {
         $_SERVER['REQUEST_METHOD'] = 'GET';
 

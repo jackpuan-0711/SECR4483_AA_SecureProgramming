@@ -1,30 +1,55 @@
 <?php
-// crypto_vault_secure.php - Secure Patient Medical Records Protection
+// crypto_vault_secure.php - Secure AES-256-GCM Medical Payload Protection
 
-function loadEnvKey(): string {
-    $envPath = __DIR__ . '/.env';
+function loadEnvKey(): string
+{
+    $envPath = __DIR__ . DIRECTORY_SEPARATOR . '.env';
 
     if (!file_exists($envPath)) {
         throw new RuntimeException(".env file is missing.");
     }
 
-    $env = parse_ini_file($envPath);
+    $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
-    if (!isset($env['MEDVAULT_KEY_B64'])) {
-        throw new RuntimeException("MEDVAULT_KEY_B64 is missing.");
+    $base64Key = null;
+
+    foreach ($lines as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+
+        if (str_starts_with($line, 'MEDVAULT_KEY_B64=')) {
+            $base64Key = substr($line, strlen('MEDVAULT_KEY_B64='));
+            $base64Key = trim($base64Key);
+            $base64Key = trim($base64Key, "\"'");
+            break;
+        }
     }
 
-    $key = base64_decode($env['MEDVAULT_KEY_B64'], true);
+    if ($base64Key === null || $base64Key === '') {
+        throw new RuntimeException("MEDVAULT_KEY_B64 is missing in .env.");
+    }
 
-    if ($key === false || strlen($key) !== 32) {
-        throw new RuntimeException("Invalid AES-256 key. Key must be 32 bytes after Base64 decoding.");
+    $key = base64_decode($base64Key, true);
+
+    if ($key === false) {
+        throw new RuntimeException("MEDVAULT_KEY_B64 is not valid Base64.");
+    }
+
+    if (strlen($key) !== 32) {
+        throw new RuntimeException("AES-256-GCM key must be exactly 32 bytes.");
     }
 
     return $key;
 }
 
-function encryptMedicalPayload(string $payload): string {
+function encryptMedicalPayload(string $payload): string
+{
     $key = loadEnvKey();
+
+    // GCM recommends a 12-byte nonce/IV.
     $iv = random_bytes(12);
     $tag = '';
 
@@ -43,64 +68,85 @@ function encryptMedicalPayload(string $payload): string {
         throw new RuntimeException("Encryption failed.");
     }
 
-    // Serialization format: [12-byte IV][ciphertext][16-byte tag]
-    return base64_encode($iv . $ciphertext . $tag);
+    // Serialization format:
+    // [12-byte IV][variable-length ciphertext][16-byte authentication tag]
+    $package = $iv . $ciphertext . $tag;
+
+    return base64_encode($package);
 }
 
-function decryptMedicalPayload(string $package): string {
-    $raw = base64_decode($package, true);
+function decryptMedicalPayload(string $packageB64): string
+{
+    $key = loadEnvKey();
 
-    if ($raw === false || strlen($raw) < 28) {
-        throw new RuntimeException("Invalid encrypted package.");
+    $package = base64_decode($packageB64, true);
+
+    if ($package === false) {
+        throw new RuntimeException("Invalid Base64 encrypted package.");
     }
 
-    $iv = substr($raw, 0, 12);
-    $tag = substr($raw, -16);
-    $ciphertext = substr($raw, 12, -16);
+    if (strlen($package) <= 28) {
+        throw new RuntimeException("Encrypted package is too short.");
+    }
+
+    $iv = substr($package, 0, 12);
+    $tag = substr($package, -16);
+    $ciphertext = substr($package, 12, -16);
 
     $plaintext = openssl_decrypt(
         $ciphertext,
         'aes-256-gcm',
-        loadEnvKey(),
+        $key,
         OPENSSL_RAW_DATA,
         $iv,
-        $tag
+        $tag,
+        ''
     );
 
     if ($plaintext === false) {
-        throw new RuntimeException("AEAD authentication failed: payload was tampered.");
+        throw new RuntimeException("AEAD authentication failed. Ciphertext or tag may be tampered.");
     }
 
     return $plaintext;
 }
 
-try {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+
+    try {
         $payload = $_POST['payload'] ?? '';
+
+        if (!mb_check_encoding($payload, 'UTF-8')) {
+            http_response_code(400);
+            echo json_encode([
+                "status" => "error",
+                "message" => "Invalid UTF-8 input."
+            ]);
+            exit;
+        }
 
         if ($payload === '') {
             http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "Payload is required."]);
+            echo json_encode([
+                "status" => "error",
+                "message" => "Payload is required."
+            ]);
             exit;
         }
 
         $encrypted = encryptMedicalPayload($payload);
-        $decrypted = decryptMedicalPayload($encrypted);
 
         echo json_encode([
             "status" => "vaulted",
             "algorithm" => "AES-256-GCM",
-            "data" => $encrypted,
-            "verification" => $decrypted
+            "data" => $encrypted
         ], JSON_PRETTY_PRINT);
-    } else {
-        echo "Secure crypto vault is running. Send POST payload to encrypt.";
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode([
+            "status" => "error",
+            "message" => $e->getMessage()
+        ], JSON_PRETTY_PRINT);
     }
-} catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode([
-        "status" => "error",
-        "message" => $e->getMessage()
-    ]);
 }
 ?>
