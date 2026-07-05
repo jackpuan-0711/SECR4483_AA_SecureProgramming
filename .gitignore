@@ -3,5 +3,6 @@ vendor/
 *.log
 .DS_Store
 Thumbs.db
-phpunit.phar.phpunit.result.cache
+phpunit.phar
+.phpunit.result.cache
 setup_auth_hashes.php
